@@ -46,8 +46,8 @@ class Message(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     messages: List[Message]
-    model: str = Field(..., alias="modelId")
-    max_tokens: int = 900
+    model: str = Field(..., alias="modelId") 
+    max_tokens: int = Field(4000, alias="max_tokens_to_sample") 
     temperature: float = 0.5
     top_p: float = 0.9
     top_k: int = 50
@@ -99,7 +99,7 @@ class BedRockClient:
         client = self._get_bedrock_client(runtime=True)
         body = json.dumps({
             "prompt": prompt,
-            "max_tokens": max_tokens,
+            "max_tokens_to_sample": max_tokens_to_sample,
             "temperature": temperature,
             "top_p": top_p,
             "top_k": top_k,
@@ -121,7 +121,7 @@ class BedRockClient:
 
         body = json.dumps({
             "prompt": prompt,
-            "max_tokens": max_tokens,
+            "max_tokens_to_sample": max_tokens_to_sample,
             "temperature": temperature,
             "top_p": top_p,
             "top_k": top_k
@@ -222,7 +222,7 @@ async def chat_completions(request: Request,
             async for chunk in bedrock_client.invoke_model_stream(
                 model_id=data.model,
                 prompt=prompt,
-                max_tokens=data.max_tokens,
+                max_tokens_to_sample=data.max_tokens,
                 temperature=data.temperature,
                 top_p=data.top_p,
                 top_k=data.top_k
@@ -262,7 +262,7 @@ async def chat_completions(request: Request,
             response = await bedrock_client.invoke_model(
                 model_id=data.model,
                 prompt=prompt,
-                max_tokens=data.max_tokens,
+                max_tokens_to_sample=data.max_tokens,
                 temperature=data.temperature,
                 top_p=data.top_p,
                 top_k=data.top_k
