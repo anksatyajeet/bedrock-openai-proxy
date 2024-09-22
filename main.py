@@ -46,7 +46,7 @@ class Message(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     messages: List[Message]
-    model: str = Field(default="mistral.mistral-7b-instruct-v0:2", alias="modelId")
+    model: str = Field(..., alias="modelId")
     max_tokens: int = 900
     temperature: float = 0.5
     top_p: float = 0.9
