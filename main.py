@@ -14,21 +14,28 @@ import asyncio
 import time
 from datetime import datetime
 from botocore.exceptions import ClientError
+import logging
 
 load_dotenv()
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 security = HTTPBearer()
 
 async def get_api_key(auth: HTTPAuthorizationCredentials = Security(security)):
     api_key_header = auth.credentials
     try:
-        access_key, secret_key = api_key_header.split(":") 
+        access_key, secret_key = api_key_header.split(":")
         os.environ['AWS_ACCESS_KEY_ID'] = access_key
         os.environ['AWS_SECRET_ACCESS_KEY'] = secret_key
-        return True 
+        logger.info("API Key validated successfully.")
+        return True
     except ValueError:
+        logger.error("Invalid API Key format.")
         raise HTTPException(status_code=403, detail="Invalid API Key format")
     except Exception as e:
+        logger.error(f"Could not validate credentials: {str(e)}")
         raise HTTPException(status_code=403, detail=f"Could not validate credentials: {str(e)}")
 
 app = FastAPI()
@@ -39,7 +46,7 @@ class Message(BaseModel):
 
 class ChatCompletionRequest(BaseModel):
     messages: List[Message]
-    model: str = Field(default="mistral.mistral-7b-instruct-v0:2", alias="modelId") 
+    model: str = Field(default="mistral.mistral-7b-instruct-v0:2", alias="modelId")
     max_tokens: int = 900
     temperature: float = 0.5
     top_p: float = 0.9
@@ -97,7 +104,6 @@ class BedRockClient:
             "top_p": top_p,
             "top_k": top_k,
         })
-        
 
         response = client.invoke_model(
             modelId=model_id,
@@ -109,10 +115,10 @@ class BedRockClient:
         response_body = json.loads(response['body'].read())
         await asyncio.sleep(1)
         return response_body.get('outputs', [{}])[0].get('text', '')
-    
+
     async def invoke_model_stream(self, model_id: str, prompt: str, max_tokens: int, temperature: float, top_p: float, top_k: int):
         client = self._get_bedrock_client(runtime=True)
-        
+
         body = json.dumps({
             "prompt": prompt,
             "max_tokens": max_tokens,
@@ -155,7 +161,7 @@ class BedRockClient:
             }
 
         except ClientError as e:
-            print(f"An error occurred: {e}")
+            logger.error(f"An error occurred during streaming: {e}")
             yield {
                 "error": str(e)
             }
@@ -166,39 +172,37 @@ class BedRockClient:
         for item in sync_generator:
             yield await loop.run_in_executor(None, lambda: item)
 
-@app.get("/models")
-async def models(request: Request, 
+@app.get("/v1/models")
+async def models(request: Request,
     auth: HTTPAuthorizationCredentials = Security(security)
     ):
-
     await get_api_key(auth)
     client = BedRockClient()
-    
+
     try:
         supported_models = client.list_models()
         return JSONResponse(content=supported_models)
     except Exception as e:
+        logger.error(f"Failed to fetch models: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to fetch models: {str(e)}")
 
-bedrock_client = BedRockClient()
 
 @app.post("/v1/chat/completions")
-async def chat_completions(request: Request, 
-    data: ChatCompletionRequest, 
+async def chat_completions(request: Request,
+    data: ChatCompletionRequest,
     background_tasks: BackgroundTasks,
     auth: HTTPAuthorizationCredentials = Security(security)
     ):
     await get_api_key(auth)
     checkpoint_start = time.time()
-    
+
     formatted_messages = [
         f"{{'role': '{msg.role}', 'content': '''{msg.content}'''}}"
         for msg in data.messages
     ]
-    
+
     prompt = f"[{', '.join(formatted_messages)}]"
 
-    
     checkpoint_loaded = time.time()
 
     if not data.messages:
@@ -210,7 +214,7 @@ async def chat_completions(request: Request,
             done_reason="load"
         ).dict())
 
-
+    bedrock_client = BedRockClient()
 
     async def generate():
         try:
@@ -226,7 +230,7 @@ async def chat_completions(request: Request,
                 if chunk and chunk.get('choices'):
                     delta = chunk['choices'][0].get('delta', {}).get('content', '')
                     full_response += delta
-                    
+
                     response_chunk = {
                         "id": f"chat{time.time_ns()}",
                         "object": "chat.completion.chunk",
@@ -240,15 +244,15 @@ async def chat_completions(request: Request,
                             "finish_reason": chunk['choices'][0].get('finish_reason')
                         }]
                     }
-                    
+
                     yield f"data: {json.dumps(response_chunk)}\n\n"
-                    
+
                     if chunk['choices'][0].get('finish_reason') == "stop":
                         break
-            
+
             yield "data: [DONE]\n\n"
         except Exception as e:
-            print(f"Error during streaming: {str(e)}")
+            logger.error(f"Error during streaming: {str(e)}")
             yield f"data: {json.dumps({'error': str(e)})}\n\n"
 
     if data.stream is None or data.stream:
@@ -263,7 +267,6 @@ async def chat_completions(request: Request,
                 top_p=data.top_p,
                 top_k=data.top_k
             )
-            
 
             chat_response = ChatResponse(
                 id=f"chat{time.time_ns()}",
@@ -276,19 +279,20 @@ async def chat_completions(request: Request,
                             "role": "assistant",
                             "content": response,
                         },
-                        "logprobs": None,  
-                        "finish_reason": "stop", 
+                        "logprobs": None,
+                        "finish_reason": "stop",
                     }
                 ],
                 usage={
-                    "prompt_tokens": 0, 
+                    "prompt_tokens": 0,
                     "completion_tokens": 0,
                     "total_tokens": 0,
                 }
             )
-            
+
             return JSONResponse(content=chat_response.dict())
         except Exception as e:
+            logger.error(f"Error during non-streaming request: {str(e)}")
             raise HTTPException(status_code=500, detail=str(e))
 
 
